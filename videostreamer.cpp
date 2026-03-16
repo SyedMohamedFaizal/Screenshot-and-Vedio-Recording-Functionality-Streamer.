@@ -53,37 +53,74 @@ void VideoStreamer::catchFrame(cv::Mat emittedFrame)
 {
     frame = emittedFrame;
 }
-
 void VideoStreamer::openVideoCamera(QString path)
 {
-    if(path.length() == 1)
-        cap.open(path.toInt());
+    if(cap.isOpened())
+        cap.release();
+
+    /*
+        Webcam usage
+        0
+        1
+    */
+
+    if(path == "0" || path == "1")
+    {
+        qDebug() << "Opening webcam:" << path;
+
+        cap.open(path.toInt(), cv::CAP_ANY);
+    }
     else
-        cap.open(path.toStdString());
+    {
+        QString username = "admin";
+        QString password = "Vikra%40123";
+
+        QString rtspUrl;
+
+        if(path.startsWith("rtsp://"))
+        {
+            QString stripped = path.mid(7);
+            rtspUrl = "rtsp://" + username + ":" + password + "@" + stripped;
+        }
+        else
+        {
+            rtspUrl = "rtsp://" + username + ":" + password + "@" + path +
+                      ":554/video/live?channel=1&subtype=0";
+        }
+
+        qDebug() << "Opening RTSP stream:";
+        qDebug() << rtspUrl;
+
+        cap.open(rtspUrl.toStdString(), cv::CAP_FFMPEG);
+
+        // reduce buffering for IP camera
+        cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+    }
 
     if(!cap.isOpened())
-        qDebug()<<"Camera not opened";
+    {
+        qDebug() << "Camera/IP Stream not opened";
+        return;
+    }
 
     VideoStreamer* worker = new VideoStreamer();
-
     worker->moveToThread(threadStreamer);
 
     connect(threadStreamer,SIGNAL(started()),
-            worker, SLOT(streamerThreadSlot()));
+            worker,SLOT(streamerThreadSlot()));
 
-    connect(worker, &VideoStreamer::emitThreadImage,
-            this, &VideoStreamer::catchFrame);
+    connect(worker,&VideoStreamer::emitThreadImage,
+            this,&VideoStreamer::catchFrame);
 
     threadStreamer->start();
 
     double fps = cap.get(cv::CAP_PROP_FPS);
 
     if(fps <= 0)
-        fps = 30;
+        fps = 25;
 
     tUpdate.start(1000 / fps);
 }
-
 void VideoStreamer::streamerThreadSlot()
 {
     cv::Mat tempFrame;
@@ -159,11 +196,11 @@ void VideoStreamer::toggleRecording()
         int fps = cap.get(cv::CAP_PROP_FPS);
 
         if(fps <= 0)
-            fps = 25;
+            fps = 30;
 
         videoWriter.open(
             fullPath.toStdString(),
-            cv::VideoWriter::fourcc('a','v','c','1'),
+            cv::VideoWriter::fourcc('H','2','6','4'),
             fps,
             cv::Size(frame.cols, frame.rows)
             );
@@ -188,3 +225,4 @@ void VideoStreamer::toggleRecording()
         qDebug()<<"Recording stopped";
     }
 }
+
