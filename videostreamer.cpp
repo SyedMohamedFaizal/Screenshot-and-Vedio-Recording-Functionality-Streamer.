@@ -53,7 +53,6 @@ void VideoStreamer::streamVideo()
             videoWriter.write(frame);
 
             int currentSecond = frameIndex / fps;
-
             static int lastSubtitleSecond = -1;
 
             if(currentSecond != lastSubtitleSecond && subtitleFile.isOpen())
@@ -62,23 +61,33 @@ void VideoStreamer::streamVideo()
 
                 QTextStream out(&subtitleFile);
 
-                double start = currentSecond;
-                double end = currentSecond + 1;
+                int startSec = currentSecond;
+                int endSec = currentSecond + 1;
 
-                QString startTime =
-                    QTime(0,0).addSecs(start)
-                        .toString("H:mm:ss.000");
+                QTime startTime(0,0);
+                startTime = startTime.addSecs(startSec);
 
-                QString endTime =
-                    QTime(0,0).addSecs(end)
-                        .toString("H:mm:ss.000");
+                QTime endTime(0,0);
+                endTime = endTime.addSecs(endSec);
+
+                QString startStr =
+                    QString("%1:%2:%3.00")
+                        .arg(startTime.hour())
+                        .arg(startTime.minute(),2,10,QChar('0'))
+                        .arg(startTime.second(),2,10,QChar('0'));
+
+                QString endStr =
+                    QString("%1:%2:%3.00")
+                        .arg(endTime.hour())
+                        .arg(endTime.minute(),2,10,QChar('0'))
+                        .arg(endTime.second(),2,10,QChar('0'));
 
                 QString telemetry =
                     QDateTime::currentDateTime()
                         .toString("yyyy-MM-dd HH:mm:ss")
-                    + " | CPU:90% | Pressure:10 bar | Depth:20 m";
+                    + " | CPU: 90 % | Pressure: 10 bar | Depth: 20 m";
 
-                out << "Dialogue: 0," << startTime << "," << endTime
+                out << "Dialogue: 0," << startStr << "," << endStr
                     << ",Default,,0,0,0,," << telemetry << "\n";
             }
 
@@ -183,15 +192,15 @@ void VideoStreamer::takeScreenshot()
 
     img = img.rgbSwapped();
 
+    QString telemetry =
+        QDateTime::currentDateTime()
+            .toString("yyyy-MM-dd HH:mm:ss")
+        + " | CPU: 90 % | Pressure: 10 bar | Depth: 20 m";
+
     QPainter painter(&img);
 
     painter.setPen(Qt::white);
     painter.setFont(QFont("Consolas",20,QFont::Bold));
-
-    QString telemetry =
-        QDateTime::currentDateTime()
-            .toString("yyyy-MM-dd HH:mm:ss")
-        + "\nCPU:90%   Pressure:10 bar   Depth:20 m";
 
     painter.drawText(img.rect(),
                      Qt::AlignBottom | Qt::AlignHCenter,
@@ -285,7 +294,6 @@ void VideoStreamer::toggleRecording()
 
         if(subtitleFile.isOpen())
             subtitleFile.close();
-
         qDebug()<<"Recording stopped";
     }
 }
