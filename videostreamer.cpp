@@ -4,6 +4,8 @@
 #include <QDir>
 #include <QStandardPaths>
 #include <QTextStream>
+#include <QPainter>
+#include <QTime>
 
 cv::Mat frame;
 
@@ -50,20 +52,26 @@ void VideoStreamer::streamVideo()
         {
             videoWriter.write(frame);
 
-            if(subtitleFile.isOpen())
+            int currentSecond = frameIndex / fps;
+
+            static int lastSubtitleSecond = -1;
+
+            if(currentSecond != lastSubtitleSecond && subtitleFile.isOpen())
             {
+                lastSubtitleSecond = currentSecond;
+
                 QTextStream out(&subtitleFile);
 
-                double start = frameIndex / fps;
-                double end = (frameIndex + 1) / fps;
+                double start = currentSecond;
+                double end = currentSecond + 1;
 
                 QString startTime =
-                    QTime(0,0).addMSecs(start*1000)
-                        .toString("H:mm:ss.zzz");
+                    QTime(0,0).addSecs(start)
+                        .toString("H:mm:ss.000");
 
                 QString endTime =
-                    QTime(0,0).addMSecs(end*1000)
-                        .toString("H:mm:ss.zzz");
+                    QTime(0,0).addSecs(end)
+                        .toString("H:mm:ss.000");
 
                 QString telemetry =
                     QDateTime::currentDateTime()
@@ -72,9 +80,9 @@ void VideoStreamer::streamVideo()
 
                 out << "Dialogue: 0," << startTime << "," << endTime
                     << ",Default,,0,0,0,," << telemetry << "\n";
-
-                frameIndex++;
             }
+
+            frameIndex++;
         }
     }
 }
@@ -98,9 +106,19 @@ void VideoStreamer::openVideoCamera(QString path)
         QString username = "admin";
         QString password = "Vikra%40123";
 
-        QString rtspUrl =
-            "rtsp://" + username + ":" + password + "@"
-            + path + ":554/video/live?channel=1&subtype=0";
+        QString rtspUrl;
+
+        if(path.startsWith("rtsp://"))
+        {
+            QString stripped = path.mid(7);
+            rtspUrl = "rtsp://" + username + ":" + password + "@" + stripped;
+        }
+        else
+        {
+            rtspUrl =
+                "rtsp://" + username + ":" + password + "@"
+                + path + ":554/video/live?channel=1&subtype=0";
+        }
 
         qDebug()<<"Opening RTSP:"<<rtspUrl;
 
@@ -140,7 +158,7 @@ void VideoStreamer::streamerThreadSlot()
 
     while(!QThread::currentThread()->isInterruptionRequested())
     {
-        cap>>tempFrame;
+        cap >> tempFrame;
 
         if(tempFrame.data)
             emit emitThreadImage(tempFrame);
@@ -164,6 +182,22 @@ void VideoStreamer::takeScreenshot()
                QImage::Format_RGB888);
 
     img = img.rgbSwapped();
+
+    QPainter painter(&img);
+
+    painter.setPen(Qt::white);
+    painter.setFont(QFont("Consolas",20,QFont::Bold));
+
+    QString telemetry =
+        QDateTime::currentDateTime()
+            .toString("yyyy-MM-dd HH:mm:ss")
+        + "\nCPU:90%   Pressure:10 bar   Depth:20 m";
+
+    painter.drawText(img.rect(),
+                     Qt::AlignBottom | Qt::AlignHCenter,
+                     telemetry);
+
+    painter.end();
 
     QString picturesPath =
         QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
@@ -231,8 +265,8 @@ void VideoStreamer::toggleRecording()
                "Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,"
                "Alignment,MarginL,MarginR,MarginV,Encoding\n";
 
-        out << "Style: Default,Consolas,20,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
-               "-1,0,0,0,100,100,0,0,1,2,0,7,10,10,10,1\n\n";
+        out << "Style: Default,Consolas,24,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
+               "-1,0,0,0,100,100,0,0,1,2,0,2,10,10,30,1\n\n";
 
         out << "[Events]\n";
         out << "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n";
@@ -244,7 +278,7 @@ void VideoStreamer::toggleRecording()
     }
     else
     {
-        recording=false;
+        recording = false;
 
         if(videoWriter.isOpened())
             videoWriter.release();
