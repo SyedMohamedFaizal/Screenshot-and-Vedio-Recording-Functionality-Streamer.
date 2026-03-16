@@ -3,6 +3,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QStandardPaths>
+#include <QTextStream>
 
 cv::Mat frame;
 
@@ -21,6 +22,9 @@ VideoStreamer::~VideoStreamer()
 
     if(videoWriter.isOpened())
         videoWriter.release();
+
+    if(subtitleFile.isOpen())
+        subtitleFile.close();
 
     threadStreamer->requestInterruption();
     threadStreamer->quit();
@@ -45,6 +49,32 @@ void VideoStreamer::streamVideo()
         if(recording && videoWriter.isOpened())
         {
             videoWriter.write(frame);
+
+            if(subtitleFile.isOpen())
+            {
+                QTextStream out(&subtitleFile);
+
+                double start = frameIndex / fps;
+                double end = (frameIndex + 1) / fps;
+
+                QString startTime =
+                    QTime(0,0).addMSecs(start*1000)
+                        .toString("H:mm:ss.zzz");
+
+                QString endTime =
+                    QTime(0,0).addMSecs(end*1000)
+                        .toString("H:mm:ss.zzz");
+
+                QString telemetry =
+                    QDateTime::currentDateTime()
+                        .toString("yyyy-MM-dd HH:mm:ss")
+                    + " | CPU:90% | Pressure:10 bar | Depth:20 m";
+
+                out << "Dialogue: 0," << startTime << "," << endTime
+                    << ",Default,,0,0,0,," << telemetry << "\n";
+
+                frameIndex++;
+            }
         }
     }
 }
@@ -53,21 +83,14 @@ void VideoStreamer::catchFrame(cv::Mat emittedFrame)
 {
     frame = emittedFrame;
 }
+
 void VideoStreamer::openVideoCamera(QString path)
 {
     if(cap.isOpened())
         cap.release();
 
-    /*
-        Webcam usage
-        0
-        1
-    */
-
     if(path == "0" || path == "1")
     {
-        qDebug() << "Opening webcam:" << path;
-
         cap.open(path.toInt(), cv::CAP_ANY);
     }
     else
@@ -75,35 +98,29 @@ void VideoStreamer::openVideoCamera(QString path)
         QString username = "admin";
         QString password = "Vikra%40123";
 
-        QString rtspUrl;
+        QString rtspUrl =
+            "rtsp://" + username + ":" + password + "@"
+            + path + ":554/video/live?channel=1&subtype=0";
 
-        if(path.startsWith("rtsp://"))
-        {
-            QString stripped = path.mid(7);
-            rtspUrl = "rtsp://" + username + ":" + password + "@" + stripped;
-        }
-        else
-        {
-            rtspUrl = "rtsp://" + username + ":" + password + "@" + path +
-                      ":554/video/live?channel=1&subtype=0";
-        }
-
-        qDebug() << "Opening RTSP stream:";
-        qDebug() << rtspUrl;
+        qDebug()<<"Opening RTSP:"<<rtspUrl;
 
         cap.open(rtspUrl.toStdString(), cv::CAP_FFMPEG);
-
-        // reduce buffering for IP camera
-        cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+        cap.set(cv::CAP_PROP_BUFFERSIZE,1);
     }
 
     if(!cap.isOpened())
     {
-        qDebug() << "Camera/IP Stream not opened";
+        qDebug()<<"Camera/IP Stream not opened";
         return;
     }
 
+    fps = cap.get(cv::CAP_PROP_FPS);
+
+    if(fps <= 0)
+        fps = 25;
+
     VideoStreamer* worker = new VideoStreamer();
+
     worker->moveToThread(threadStreamer);
 
     connect(threadStreamer,SIGNAL(started()),
@@ -114,20 +131,16 @@ void VideoStreamer::openVideoCamera(QString path)
 
     threadStreamer->start();
 
-    double fps = cap.get(cv::CAP_PROP_FPS);
-
-    if(fps <= 0)
-        fps = 25;
-
-    tUpdate.start(1000 / fps);
+    tUpdate.start(1000/fps);
 }
+
 void VideoStreamer::streamerThreadSlot()
 {
     cv::Mat tempFrame;
 
     while(!QThread::currentThread()->isInterruptionRequested())
     {
-        cap >> tempFrame;
+        cap>>tempFrame;
 
         if(tempFrame.data)
             emit emitThreadImage(tempFrame);
@@ -167,9 +180,7 @@ void VideoStreamer::takeScreenshot()
         QDateTime::currentDateTime()
             .toString("yyyy.MM.dd-hh.mm.ss") + ".jpg";
 
-    QString fullPath = savePath + "/" + fileName;
-
-    img.save(fullPath,"JPG");
+    img.save(savePath + "/" + fileName,"JPG");
 }
 
 void VideoStreamer::toggleRecording()
@@ -186,23 +197,19 @@ void VideoStreamer::toggleRecording()
 
     if(!recording)
     {
-        QString fileName =
+        QString baseName =
             "video_" +
             QDateTime::currentDateTime()
-                .toString("yyyy.MM.dd-hh.mm.ss") + ".mp4";
+                .toString("yyyy.MM.dd-hh.mm.ss");
 
-        QString fullPath = savePath + "/" + fileName;
-
-        int fps = cap.get(cv::CAP_PROP_FPS);
-
-        if(fps <= 0)
-            fps = 30;
+        QString videoPath = savePath + "/" + baseName + ".mp4";
+        QString subtitlePath = savePath + "/" + baseName + ".ass";
 
         videoWriter.open(
-            fullPath.toStdString(),
+            videoPath.toStdString(),
             cv::VideoWriter::fourcc('H','2','6','4'),
             fps,
-            cv::Size(frame.cols, frame.rows)
+            cv::Size(frame.cols,frame.rows)
             );
 
         if(!videoWriter.isOpened())
@@ -211,18 +218,40 @@ void VideoStreamer::toggleRecording()
             return;
         }
 
+        subtitleFile.setFileName(subtitlePath);
+        subtitleFile.open(QIODevice::WriteOnly | QIODevice::Text);
+
+        QTextStream out(&subtitleFile);
+
+        out << "[Script Info]\n";
+        out << "ScriptType: v4.00+\n\n";
+
+        out << "[V4+ Styles]\n";
+        out << "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,"
+               "Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,"
+               "Alignment,MarginL,MarginR,MarginV,Encoding\n";
+
+        out << "Style: Default,Consolas,20,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
+               "-1,0,0,0,100,100,0,0,1,2,0,7,10,10,10,1\n\n";
+
+        out << "[Events]\n";
+        out << "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n";
+
+        frameIndex = 0;
         recording = true;
 
-        qDebug()<<"Recording started:"<<fullPath;
+        qDebug()<<"Recording started:"<<videoPath;
     }
     else
     {
-        recording = false;
+        recording=false;
 
         if(videoWriter.isOpened())
             videoWriter.release();
 
+        if(subtitleFile.isOpen())
+            subtitleFile.close();
+
         qDebug()<<"Recording stopped";
     }
 }
-
