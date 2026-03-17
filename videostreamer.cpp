@@ -113,13 +113,12 @@ void VideoStreamer::openVideoCamera(QString path)
     }
     else
     {
-        qDebug() << "Opening TCP stream from port 5000";
+        qDebug() << "Opening RTSP stream:" << path;
 
-        std::string pipeline =
-            "tcpclientsrc host=127.0.0.1 port=5000 ! "
-            "tsdemux ! h264parse ! avdec_h264 ! videoconvert ! appsink";
-
-        cap.open(pipeline, cv::CAP_GSTREAMER);
+        /*
+            CLEAN RTSP CONNECTION (NO GSTREAMER PIPELINE)
+        */
+        cap.open("rtspsrc location=rtsp://192.168.56.2:8554/quality_h264 protocols=tcp ! rtph264depay ! decodebin ! videoconvert ! appsink", cv::CAP_GSTREAMER);
     }
 
     if(!cap.isOpened())
@@ -130,8 +129,9 @@ void VideoStreamer::openVideoCamera(QString path)
 
     fps = cap.get(cv::CAP_PROP_FPS);
     if(fps <= 0)
-        fps = 25;
+        fps = 40;
 
+    qDebug()<<fps;
     VideoStreamer* worker = new VideoStreamer();
 
     worker->moveToThread(threadStreamer);
@@ -232,7 +232,6 @@ void VideoStreamer::toggleRecording()
                 .toString("yyyy.MM.dd-hh.mm.ss");
 
         QString videoPath = savePath + "/" + baseName + ".mp4";
-        QString subtitlePath = savePath + "/" + baseName + ".ass";
 
         videoWriter.open(
             videoPath.toStdString(),
@@ -247,25 +246,6 @@ void VideoStreamer::toggleRecording()
             return;
         }
 
-        subtitleFile.setFileName(subtitlePath);
-        subtitleFile.open(QIODevice::WriteOnly | QIODevice::Text);
-
-        QTextStream out(&subtitleFile);
-
-        out << "[Script Info]\n";
-        out << "ScriptType: v4.00+\n\n";
-
-        out << "[V4+ Styles]\n";
-        out << "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,"
-               "Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,"
-               "Alignment,MarginL,MarginR,MarginV,Encoding\n";
-
-        out << "Style: Default,Consolas,24,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
-               "-1,0,0,0,100,100,0,0,1,2,0,2,10,10,30,1\n\n";
-
-        out << "[Events]\n";
-        out << "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n";
-
         frameIndex = 0;
         recording = true;
 
@@ -277,9 +257,6 @@ void VideoStreamer::toggleRecording()
 
         if(videoWriter.isOpened())
             videoWriter.release();
-
-        if(subtitleFile.isOpen())
-            subtitleFile.close();
 
         qDebug()<<"Recording stopped";
     }
