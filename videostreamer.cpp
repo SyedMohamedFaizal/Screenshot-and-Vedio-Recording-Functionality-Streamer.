@@ -106,30 +106,24 @@ void VideoStreamer::openVideoCamera(QString path)
     if(cap.isOpened())
         cap.release();
 
-    /*
-        INPUT LOGIC:
-
-        0 / 1  → Local webcam
-        udp    → Receive from GStreamer (port 500)
-        else   → Direct RTSP
-    */
-
     if(path == "0" || path == "1")
     {
         qDebug() << "Opening webcam:" << path;
         cap.open(path.toInt(), cv::CAP_DSHOW);
     }
-    else if(path.toLower() == "udp")
-    {
-        qDebug() << "Receiving stream from UDP port 500";
-
-        // OpenCV receives UDP using FFMPEG backend
-        cap.open("udp://127.0.0.1:500", cv::CAP_FFMPEG);
-    }
     else
     {
-        qDebug() << "Opening RTSP directly:" << path;
-        cap.open(path.toStdString(), cv::CAP_FFMPEG);
+        qDebug() << "Opening TCP GStreamer receiver from port 5000";
+
+        /*
+            TCP RECEIVER PIPELINE
+        */
+        std::string pipeline =
+            "udpsrc port=5000 ! "
+            "tsdemux ! h264parse ! avdec_h264 ! videoconvert ! appsink";
+
+
+        cap.open(pipeline, cv::CAP_GSTREAMER);
     }
 
     if(!cap.isOpened())
