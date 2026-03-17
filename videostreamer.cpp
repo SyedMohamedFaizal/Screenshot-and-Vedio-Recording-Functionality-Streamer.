@@ -113,15 +113,11 @@ void VideoStreamer::openVideoCamera(QString path)
     }
     else
     {
-        qDebug() << "Opening TCP GStreamer receiver from port 5000";
+        qDebug() << "Opening TCP stream from port 5000";
 
-        /*
-            TCP RECEIVER PIPELINE
-        */
         std::string pipeline =
-            "udpsrc port=5000 ! "
+            "tcpclientsrc host=127.0.0.1 port=5000 ! "
             "tsdemux ! h264parse ! avdec_h264 ! videoconvert ! appsink";
-
 
         cap.open(pipeline, cv::CAP_GSTREAMER);
     }
