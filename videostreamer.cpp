@@ -106,43 +106,39 @@ void VideoStreamer::openVideoCamera(QString path)
     if(cap.isOpened())
         cap.release();
 
+    /*
+        INPUT LOGIC:
+
+        0 / 1  → Local webcam
+        udp    → Receive from GStreamer (port 500)
+        else   → Direct RTSP
+    */
+
     if(path == "0" || path == "1")
     {
-        cap.open(path.toInt(), cv::CAP_ANY);
+        qDebug() << "Opening webcam:" << path;
+        cap.open(path.toInt(), cv::CAP_DSHOW);
+    }
+    else if(path.toLower() == "udp")
+    {
+        qDebug() << "Receiving stream from UDP port 500";
+
+        // OpenCV receives UDP using FFMPEG backend
+        cap.open("udp://127.0.0.1:500", cv::CAP_FFMPEG);
     }
     else
     {
-        QString username = "admin";
-        QString password = "Vikra%40123";
-
-        QString rtspUrl;
-
-        if(path.startsWith("rtsp://"))
-        {
-            QString stripped = path.mid(7);
-            rtspUrl = "rtsp://" + username + ":" + password + "@" + stripped;
-        }
-        else
-        {
-            rtspUrl =
-                "rtsp://" + username + ":" + password + "@"
-                + path + ":554/video/live?channel=1&subtype=0";
-        }
-
-        qDebug()<<"Opening RTSP:"<<rtspUrl;
-
-        cap.open(rtspUrl.toStdString(), cv::CAP_FFMPEG);
-        cap.set(cv::CAP_PROP_BUFFERSIZE,1);
+        qDebug() << "Opening RTSP directly:" << path;
+        cap.open(path.toStdString(), cv::CAP_FFMPEG);
     }
 
     if(!cap.isOpened())
     {
-        qDebug()<<"Camera/IP Stream not opened";
+        qDebug() << "Camera/IP Stream not opened";
         return;
     }
 
     fps = cap.get(cv::CAP_PROP_FPS);
-
     if(fps <= 0)
         fps = 25;
 
@@ -150,15 +146,15 @@ void VideoStreamer::openVideoCamera(QString path)
 
     worker->moveToThread(threadStreamer);
 
-    connect(threadStreamer,SIGNAL(started()),
-            worker,SLOT(streamerThreadSlot()));
+    connect(threadStreamer, SIGNAL(started()),
+            worker, SLOT(streamerThreadSlot()));
 
-    connect(worker,&VideoStreamer::emitThreadImage,
-            this,&VideoStreamer::catchFrame);
+    connect(worker, &VideoStreamer::emitThreadImage,
+            this, &VideoStreamer::catchFrame);
 
     threadStreamer->start();
 
-    tUpdate.start(1000/fps);
+    tUpdate.start(1000 / fps);
 }
 
 void VideoStreamer::streamerThreadSlot()
@@ -294,6 +290,7 @@ void VideoStreamer::toggleRecording()
 
         if(subtitleFile.isOpen())
             subtitleFile.close();
+
         qDebug()<<"Recording stopped";
     }
 }
