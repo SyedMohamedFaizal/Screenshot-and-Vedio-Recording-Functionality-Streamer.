@@ -12,19 +12,16 @@ QImage OpencvImageProvider::requestImage(const QString &id,
                                          const QSize &requestedSize)
 {
     Q_UNUSED(id);
+    Q_UNUSED(requestedSize);
 
     if(size)
         *size = image.size();
-
-    if(requestedSize.width() > 0 && requestedSize.height() > 0)
-        return image.scaled(requestedSize);
 
     return image;
 }
 
 void OpencvImageProvider::updateImage(const QImage &img)
 {
-    image = img;
-    //qDebug()<<"red";
+    image = img.copy();
     emit imageChanged();
 }

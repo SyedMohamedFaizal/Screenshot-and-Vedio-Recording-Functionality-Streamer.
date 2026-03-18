@@ -3,18 +3,12 @@
 #include <QDateTime>
 #include <QDir>
 #include <QStandardPaths>
-#include <QTextStream>
-#include <QPainter>
-#include <QTime>
-
-cv::Mat frame;
+#include <algorithm>
+#include <string>
 
 VideoStreamer::VideoStreamer()
 {
     threadStreamer = new QThread(this);
-
-    connect(&tUpdate, &QTimer::timeout,
-            this, &VideoStreamer::streamVideo);
 }
 
 VideoStreamer::~VideoStreamer()
@@ -37,88 +31,59 @@ VideoStreamer::~VideoStreamer()
 
 void VideoStreamer::streamVideo()
 {
-    if(frame.data)
+    if(currentFrame.empty())
+        return;
+
+    cv::Mat outputFrame = frameWithTelemetry(currentFrame);
+
+    QImage img(currentFrame.data,
+               currentFrame.cols,
+               currentFrame.rows,
+               currentFrame.step,
+               QImage::Format_BGR888);
+
+    emit newImage(img.copy());
+
+    if(recording && videoWriter.isOpened())
     {
-        QImage img(frame.data,
-                   frame.cols,
-                   frame.rows,
-                   QImage::Format_RGB888);
-
-        img = img.rgbSwapped();
-
-        emit newImage(img);
-
-        if(recording && videoWriter.isOpened())
-        {
-            videoWriter.write(frame);
-
-            int currentSecond = frameIndex / fps;
-            static int lastSubtitleSecond = -1;
-
-            if(currentSecond != lastSubtitleSecond && subtitleFile.isOpen())
-            {
-                lastSubtitleSecond = currentSecond;
-
-                QTextStream out(&subtitleFile);
-
-                int startSec = currentSecond;
-                int endSec = currentSecond + 1;
-
-                QTime startTime(0,0);
-                startTime = startTime.addSecs(startSec);
-
-                QTime endTime(0,0);
-                endTime = endTime.addSecs(endSec);
-
-                QString startStr =
-                    QString("%1:%2:%3.00")
-                        .arg(startTime.hour())
-                        .arg(startTime.minute(),2,10,QChar('0'))
-                        .arg(startTime.second(),2,10,QChar('0'));
-
-                QString endStr =
-                    QString("%1:%2:%3.00")
-                        .arg(endTime.hour())
-                        .arg(endTime.minute(),2,10,QChar('0'))
-                        .arg(endTime.second(),2,10,QChar('0'));
-
-                QString telemetry =
-                    QDateTime::currentDateTime()
-                        .toString("yyyy-MM-dd HH:mm:ss")
-                    + " | CPU: 90 % | Pressure: 10 bar | Depth: 20 m";
-
-                out << "Dialogue: 0," << startStr << "," << endStr
-                    << ",Default,,0,0,0,," << telemetry << "\n";
-            }
-
-            frameIndex++;
-        }
+        videoWriter.write(outputFrame);
+        frameIndex++;
     }
 }
 
 void VideoStreamer::catchFrame(cv::Mat emittedFrame)
 {
-    frame = emittedFrame;
+    if(emittedFrame.empty())
+        return;
+
+    currentFrame = emittedFrame.clone();
+    streamVideo();
 }
 
 void VideoStreamer::openVideoCamera(QString path)
 {
-    if(cap.isOpened())
-        cap.release();
+    stopVideoCamera();
 
-    if(path == "0" || path == "1")
+    const QString inputPath = path.trimmed();
+
+    if(inputPath == "0" || inputPath == "1")
     {
-        qDebug() << "Opening webcam:" << path;
-        cap.open(path.toInt(), cv::CAP_DSHOW);
+        qDebug() << "Opening webcam:" << inputPath;
+        cap.open(inputPath.toInt(), cv::CAP_DSHOW);
     }
     else
     {
-        qDebug() << "Opening RTSP stream:" << path;
+        const QString streamUrl = inputPath.isEmpty()
+                ? "rtsp://192.168.56.2:8554/quality_h264"
+                : inputPath;
+        const QString pipeline =
+                QString("rtspsrc location=%1 protocols=tcp latency=0 drop-on-latency=true ! "
+                        "rtph264depay ! h264parse ! decodebin ! queue max-size-buffers=1 leaky=downstream ! "
+                        "videoconvert ! appsink sync=false max-buffers=1 drop=true")
+                .arg(streamUrl);
 
-        /*
-            CLEAN RTSP CONNECTION (NO GSTREAMER PIPELINE)
-        */
-        cap.open("rtspsrc location=rtsp://192.168.56.2:8554/quality_h264 protocols=tcp ! rtph264depay ! decodebin ! videoconvert ! appsink", cv::CAP_GSTREAMER);
+        qDebug() << "Opening RTSP stream:" << streamUrl;
+        cap.open(pipeline.toStdString(), cv::CAP_GSTREAMER);
     }
 
     if(!cap.isOpened())
@@ -131,6 +96,8 @@ void VideoStreamer::openVideoCamera(QString path)
     if(fps <= 0)
         fps = 40;
 
+    cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+
     qDebug()<<fps;
     VideoStreamer* worker = new VideoStreamer();
 
@@ -140,11 +107,38 @@ void VideoStreamer::openVideoCamera(QString path)
             worker, SLOT(streamerThreadSlot()));
 
     connect(worker, &VideoStreamer::emitThreadImage,
-            this, &VideoStreamer::catchFrame);
+            this, &VideoStreamer::catchFrame,
+            Qt::BlockingQueuedConnection);
+
+    connect(threadStreamer, &QThread::finished,
+            worker, &QObject::deleteLater);
 
     threadStreamer->start();
+}
 
-    tUpdate.start(1000 / fps);
+void VideoStreamer::stopVideoCamera()
+{
+    tUpdate.stop();
+
+    if(videoWriter.isOpened())
+        videoWriter.release();
+
+    if(subtitleFile.isOpen())
+        subtitleFile.close();
+
+    recording = false;
+    frameIndex = 0;
+    currentFrame.release();
+
+    if(threadStreamer->isRunning())
+    {
+        threadStreamer->requestInterruption();
+        threadStreamer->quit();
+        threadStreamer->wait();
+    }
+
+    if(cap.isOpened())
+        cap.release();
 }
 
 void VideoStreamer::streamerThreadSlot()
@@ -153,10 +147,10 @@ void VideoStreamer::streamerThreadSlot()
 
     while(!QThread::currentThread()->isInterruptionRequested())
     {
-        cap >> tempFrame;
-
-        if(tempFrame.data)
-            emit emitThreadImage(tempFrame);
+        if(cap.read(tempFrame) && !tempFrame.empty())
+            emit emitThreadImage(tempFrame.clone());
+        else
+            QThread::msleep(2);
 
         if(QThread::currentThread()->isInterruptionRequested())
         {
@@ -168,31 +162,15 @@ void VideoStreamer::streamerThreadSlot()
 
 void VideoStreamer::takeScreenshot()
 {
-    if(!frame.data)
+    if(currentFrame.empty())
         return;
 
-    QImage img(frame.data,
-               frame.cols,
-               frame.rows,
-               QImage::Format_RGB888);
-
-    img = img.rgbSwapped();
-
-    QString telemetry =
-        QDateTime::currentDateTime()
-            .toString("yyyy-MM-dd HH:mm:ss")
-        + " | CPU: 90 % | Pressure: 10 bar | Depth: 20 m";
-
-    QPainter painter(&img);
-
-    painter.setPen(Qt::white);
-    painter.setFont(QFont("Consolas",20,QFont::Bold));
-
-    painter.drawText(img.rect(),
-                     Qt::AlignBottom | Qt::AlignHCenter,
-                     telemetry);
-
-    painter.end();
+    const cv::Mat outputFrame = frameWithTelemetry(currentFrame);
+    QImage img(outputFrame.data,
+               outputFrame.cols,
+               outputFrame.rows,
+               outputFrame.step,
+               QImage::Format_BGR888);
 
     QString picturesPath =
         QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
@@ -209,11 +187,17 @@ void VideoStreamer::takeScreenshot()
         QDateTime::currentDateTime()
             .toString("yyyy.MM.dd-hh.mm.ss") + ".jpg";
 
-    img.save(savePath + "/" + fileName,"JPG");
+    img.copy().save(savePath + "/" + fileName,"JPG");
 }
 
 void VideoStreamer::toggleRecording()
 {
+    if(currentFrame.empty())
+    {
+        qDebug() << "Recording unavailable: no current frame";
+        return;
+    }
+
     QString videoRoot =
         QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
 
@@ -237,7 +221,7 @@ void VideoStreamer::toggleRecording()
             videoPath.toStdString(),
             cv::VideoWriter::fourcc('H','2','6','4'),
             fps,
-            cv::Size(frame.cols,frame.rows)
+            cv::Size(currentFrame.cols,currentFrame.rows)
             );
 
         if(!videoWriter.isOpened())
@@ -258,6 +242,71 @@ void VideoStreamer::toggleRecording()
         if(videoWriter.isOpened())
             videoWriter.release();
 
+        if(subtitleFile.isOpen())
+            subtitleFile.close();
+
         qDebug()<<"Recording stopped";
     }
+}
+
+QString VideoStreamer::telemetryOverlayText() const
+{
+    return QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
+            + " | CPU: 90 % | Pressure: 10 bar | Depth: 20 m";
+}
+
+cv::Mat VideoStreamer::frameWithTelemetry(const cv::Mat &sourceFrame) const
+{
+    if(sourceFrame.empty())
+        return cv::Mat();
+
+    cv::Mat outputFrame = sourceFrame.clone();
+    const std::string overlayText = telemetryOverlayText().toStdString();
+    const double fontScale = std::clamp(outputFrame.cols / 1400.0, 0.8, 1.5);
+    const int thickness = std::max(2, static_cast<int>(fontScale * 2.4));
+    int baseline = 0;
+    const cv::Size textSize = cv::getTextSize(overlayText,
+                                              cv::FONT_HERSHEY_DUPLEX,
+                                              fontScale,
+                                              thickness,
+                                              &baseline);
+    const int margin = std::max(18, outputFrame.cols / 50);
+    const cv::Point origin(margin,
+                           std::max(textSize.height + margin,
+                                    outputFrame.rows - margin));
+
+    drawOutlinedText(outputFrame,
+                     overlayText,
+                     origin,
+                     fontScale,
+                     thickness);
+
+    return outputFrame;
+}
+
+void VideoStreamer::drawOutlinedText(cv::Mat &targetFrame,
+                                     const std::string &text,
+                                     const cv::Point &origin,
+                                     double fontScale,
+                                     int thickness) const
+{
+    const int outlineThickness = thickness + 3;
+
+    cv::putText(targetFrame,
+                text,
+                origin,
+                cv::FONT_HERSHEY_DUPLEX,
+                fontScale,
+                cv::Scalar(0, 0, 0),
+                outlineThickness,
+                cv::LINE_AA);
+
+    cv::putText(targetFrame,
+                text,
+                origin,
+                cv::FONT_HERSHEY_DUPLEX,
+                fontScale,
+                cv::Scalar(255, 255, 255),
+                thickness,
+                cv::LINE_AA);
 }
