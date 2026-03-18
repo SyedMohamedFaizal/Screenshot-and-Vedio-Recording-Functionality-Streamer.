@@ -38,7 +38,7 @@ ApplicationWindow {
     property var liveProvider
 
     property bool autoStartCamera: true
-    property string logoSource: ""
+    property string logoSource: "C:/dc vot/logo.png"
     property string utcClock: ""
     property string streamTs: ""
     property double lastFrameTick: 0
@@ -223,9 +223,9 @@ ApplicationWindow {
             return ""
         if (trimmed.indexOf("qrc:/") === 0 || trimmed.indexOf("file:/") === 0
                 || trimmed.indexOf("http://") === 0 || trimmed.indexOf("https://") === 0)
-            return trimmed
+            return encodeURI(trimmed)
         if (/^[A-Za-z]:[\\/]/.test(trimmed))
-            return "file:///" + trimmed.replace(/\\/g, "/")
+            return encodeURI("file:///" + trimmed.replace(/\\/g, "/"))
         return trimmed
     }
 
@@ -444,6 +444,16 @@ ApplicationWindow {
         }
     }
 
+    Timer {
+        id: deferredAutoStartTimer
+        interval: 250
+        repeat: false
+        onTriggered: {
+            if (root.autoStartCamera)
+                streamBackend.startFeed()
+        }
+    }
+
     Rectangle {
         anchors.fill: parent
         color: root.bgBase
@@ -500,6 +510,7 @@ ApplicationWindow {
                             anchors.fill: parent
                             anchors.margins: 4
                             source: root.asAssetUrl(root.logoSource)
+                            asynchronous: true
                             fillMode: Image.PreserveAspectFit
                             smooth: true
                             visible: status === Image.Ready
@@ -1477,8 +1488,6 @@ ApplicationWindow {
         root.liveProvider = liveImageProvider
         root.utcClock = root.utcString()
         root.streamTs = root.tsString()
-
-        if (root.autoStartCamera)
-            streamBackend.startFeed()
+        deferredAutoStartTimer.start()
     }
 }
